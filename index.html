@@ -1,0 +1,625 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Float</title>
+<style>
+  :root{
+    --ink:      #0a0d1c;
+    --deep:     #131a30;
+    --glow:     #ffe9c2;
+    --mist:     #f3ecd9;
+    --star:     #eaf2ff;
+    --skin:     #f6dfc0;
+  }
+  *{ margin:0; padding:0; box-sizing:border-box; -webkit-tap-highlight-color:transparent; touch-action:none; }
+  html,body{
+    width:100%; height:100%; overflow:hidden;
+    background:var(--ink);
+    font-family: Georgia, 'Iowan Old Style', 'Palatino Linotype', serif;
+    -webkit-user-select:none; user-select:none;
+  }
+  #scene{ position:fixed; inset:0; display:block; }
+
+  #veil{
+    position:fixed; inset:0;
+    background:var(--ink);
+    z-index:50;
+    display:flex; align-items:center; justify-content:center;
+    transition:opacity 2.5s ease;
+  }
+  #veil.hidden{ opacity:0; pointer-events:none; }
+  #startCard{ text-align:center; color:var(--mist); opacity:0.95; }
+  #startCard p{
+    font-size:14px; letter-spacing:0.05em; font-weight:300;
+    margin-top:26px; color:var(--mist); opacity:0.6; max-width:290px;
+  }
+  #beginBtn{
+    font-family:inherit; font-size:15px; letter-spacing:0.08em;
+    color:var(--ink); background:var(--glow);
+    border:none; border-radius:26px; padding:12px 34px;
+    cursor:pointer; opacity:0.95;
+    transition:opacity 0.4s ease, transform 0.4s ease;
+  }
+  #beginBtn:hover{ opacity:1; transform:translateY(-1px); }
+
+  #controls{
+    position:fixed; top:22px; right:22px; z-index:20;
+    opacity:0; transition:opacity 0.6s ease;
+    display:flex; gap:14px; align-items:center;
+  }
+  #controls.visible{ opacity:0.55; }
+  #controls:hover{ opacity:0.9; }
+  .ctrl-btn{
+    background:none; border:none; cursor:pointer;
+    color:var(--mist); font-family:inherit; font-size:12px;
+    letter-spacing:0.05em; opacity:0.85;
+  }
+
+  #breathCircle{
+    position:fixed; left:50%; top:50%;
+    width:86px; height:86px;
+    transform:translate(-50%,-50%) scale(1);
+    border-radius:50%;
+    border:1px solid rgba(255,233,194,0.45);
+    box-shadow:0 0 30px 6px rgba(255,233,194,0.12);
+    display:flex; align-items:center; justify-content:center;
+    text-align:center;
+    color:var(--mist);
+    font-size:12px; letter-spacing:0.08em; font-weight:300;
+    opacity:0;
+    transition:opacity 3s ease, box-shadow 0.4s ease;
+    pointer-events:none;
+    z-index:6;
+    background:rgba(255,233,194,0.03);
+  }
+  #breathCircle.visible{ opacity:0.85; }
+</style>
+</head>
+<body>
+
+<canvas id="scene"></canvas>
+<div id="breathCircle">breathe in</div>
+
+<div id="controls">
+  <button class="ctrl-btn" id="soundToggle">sound: on</button>
+</div>
+
+<div id="veil">
+  <div id="startCard">
+    <button id="beginBtn">begin</button>
+    <p>set your worries down for a while.</p>
+  </div>
+</div>
+
+<script>
+(() => {
+  "use strict";
+
+  const canvas = document.getElementById('scene');
+  const ctx = canvas.getContext('2d');
+  let W, H, DPR;
+  function resize(){
+    DPR = Math.min(window.devicePixelRatio || 1, 2);
+    W = window.innerWidth; H = window.innerHeight;
+    canvas.width = W * DPR; canvas.height = H * DPR;
+    canvas.style.width = W + 'px'; canvas.style.height = H + 'px';
+    ctx.setTransform(DPR,0,0,DPR,0,0);
+  }
+  window.addEventListener('resize', resize);
+  resize();
+
+  // ---------- starfield, two parallax depths, brighter ----------
+  function makeStars(count, maxR){
+    const arr = [];
+    for (let i = 0; i < count; i++){
+      arr.push({
+        x: Math.random(), y: Math.random(),
+        r: 0.5 + Math.random() * maxR,
+        flick: Math.random() * Math.PI * 2,
+        flickSpeed: 0.0002 + Math.random() * 0.0004
+      });
+    }
+    return arr;
+  }
+  const starsFar = makeStars(100, 1.0);
+  const starsNear = makeStars(55, 1.8);
+
+  // nebula blobs, brighter and cooler-warm mix
+  const nebulae = [
+    { xR:0.20, yR:0.28, rR:0.36, color: '90,74,150' },
+    { xR:0.80, yR:0.60, rR:0.34, color: '58,96,140' },
+    { xR:0.55, yR:0.18, rR:0.30, color: '120,80,110' }
+  ];
+
+  // occasional slow shooting star
+  let shootingStar = null;
+  function maybeSpawnShootingStar(t){
+    if (!shootingStar && Math.random() < 0.0009){
+      const startX = Math.random() * W * 0.6;
+      shootingStar = {
+        x: startX, y: -20,
+        vx: 0.35 + Math.random() * 0.15,
+        vy: 0.22 + Math.random() * 0.1,
+        life: 1
+      };
+    }
+  }
+  function updateShootingStar(){
+    if (!shootingStar) return;
+    shootingStar.x += shootingStar.vx;
+    shootingStar.y += shootingStar.vy;
+    shootingStar.life -= 0.0035;
+    if (shootingStar.life <= 0 || shootingStar.x > W + 40 || shootingStar.y > H + 40){
+      shootingStar = null;
+    }
+  }
+  function drawShootingStar(){
+    if (!shootingStar) return;
+    const s = shootingStar;
+    const tailX = s.x - s.vx * 26, tailY = s.y - s.vy * 26;
+    const grad = ctx.createLinearGradient(s.x, s.y, tailX, tailY);
+    grad.addColorStop(0, `rgba(243,236,217,${0.85 * s.life})`);
+    grad.addColorStop(1, 'rgba(243,236,217,0)');
+    ctx.strokeStyle = grad;
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(s.x, s.y);
+    ctx.lineTo(tailX, tailY);
+    ctx.stroke();
+  }
+
+  // ---------- ripples from taps ----------
+  const ripples = [];
+  function spawnRipple(x, y){
+    ripples.push({ x, y, r: 4, alpha: 0.6 });
+  }
+  function updateRipples(){
+    for (let i = ripples.length - 1; i >= 0; i--){
+      const rp = ripples[i];
+      rp.r += 0.55;
+      rp.alpha -= 0.0045;
+      if (rp.alpha <= 0) ripples.splice(i, 1);
+    }
+  }
+  function drawRipples(){
+    ripples.forEach(rp => {
+      ctx.beginPath();
+      ctx.arc(rp.x, rp.y, rp.r, 0, Math.PI * 2);
+      ctx.strokeStyle = `rgba(255,233,194,${rp.alpha})`;
+      ctx.lineWidth = 1;
+      ctx.stroke();
+    });
+  }
+
+  // ---------- the floating figure (side profile, lying on his back) ----------
+  const body = {
+    x: 0, y: 0,
+    vx: 0, vy: 0,
+    tilt: 0
+  };
+  function initBody(){ body.x = W / 2; body.y = H * 0.4; }
+  initBody();
+
+  const DAMPING = 0.985;
+  const MAX_SPEED = 0.55;
+  const GRAVITY = 0.0026;      // slow, constant downward drift
+  const EDGE_PAD = 90;
+
+  function applyForce(fx, fy){
+    body.vx += fx;
+    body.vy += fy;
+    const sp = Math.hypot(body.vx, body.vy);
+    if (sp > MAX_SPEED){
+      body.vx = (body.vx / sp) * MAX_SPEED;
+      body.vy = (body.vy / sp) * MAX_SPEED;
+    }
+  }
+
+  function updateBody(){
+    body.vy += GRAVITY;
+
+    if (body.x < EDGE_PAD) body.vx += (EDGE_PAD - body.x) * 0.0006;
+    if (body.x > W - EDGE_PAD) body.vx -= (body.x - (W - EDGE_PAD)) * 0.0006;
+    if (body.y < EDGE_PAD) body.vy += (EDGE_PAD - body.y) * 0.0006;
+    if (body.y > H - EDGE_PAD) body.vy -= (body.y - (H - EDGE_PAD)) * 0.0006;
+
+    body.x += body.vx;
+    body.y += body.vy;
+    body.vx *= DAMPING;
+    body.vy *= DAMPING;
+
+    // gentle nose-up when rising, nose-down when sinking — subtle, side view
+    const targetTilt = Math.max(-0.18, Math.min(0.18, -body.vy * 2.2));
+    body.tilt += (targetTilt - body.tilt) * 0.02;
+  }
+
+  // side-view: head to the right, legs extending left, lying flat on his back
+  function drawBody(t, breathPhase){
+    ctx.save();
+    ctx.translate(body.x, body.y);
+    ctx.rotate(body.tilt);
+
+    // soft bright aura
+    const aura = ctx.createRadialGradient(0, 0, 6, 0, 0, 110);
+    aura.addColorStop(0, 'rgba(255,233,194,0.16)');
+    aura.addColorStop(1, 'rgba(255,233,194,0)');
+    ctx.fillStyle = aura;
+    ctx.beginPath();
+    ctx.arc(0, 0, 110, 0, Math.PI * 2);
+    ctx.fill();
+
+    const chestLift = breathPhase * 3.2;
+
+    ctx.fillStyle = 'rgba(246,223,192,0.94)';
+    ctx.strokeStyle = 'rgba(255,238,210,0.5)';
+    ctx.lineWidth = 1;
+
+    // far leg (slightly behind, bent gently at the knee)
+    ctx.beginPath();
+    ctx.moveTo(-6, 6);
+    ctx.quadraticCurveTo(-40, 10, -58, 2);
+    ctx.quadraticCurveTo(-70, -2, -84, 4);
+    ctx.lineWidth = 13;
+    ctx.strokeStyle = 'rgba(214,190,158,0.85)';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // near leg
+    ctx.beginPath();
+    ctx.moveTo(-6, 10);
+    ctx.quadraticCurveTo(-38, 15, -54, 8);
+    ctx.quadraticCurveTo(-68, 3, -80, 9);
+    ctx.lineWidth = 14;
+    ctx.strokeStyle = 'rgba(246,223,192,0.94)';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // torso, lying flat, chest rising gently with breath
+    ctx.beginPath();
+    ctx.moveTo(-10, 10);
+    ctx.quadraticCurveTo(6, 4 - chestLift, 26, 2 - chestLift * 0.6);
+    ctx.quadraticCurveTo(6, 16, -10, 16);
+    ctx.closePath();
+    ctx.fillStyle = 'rgba(246,223,192,0.94)';
+    ctx.fill();
+
+    // far arm, resting across the middle
+    ctx.beginPath();
+    ctx.moveTo(10, 2 - chestLift * 0.5);
+    ctx.quadraticCurveTo(0, -16, -14, -12);
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = 'rgba(214,190,158,0.85)';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // near arm, relaxed at his side
+    ctx.beginPath();
+    ctx.moveTo(16, 6 - chestLift * 0.5);
+    ctx.quadraticCurveTo(6, 22, -8, 26);
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = 'rgba(246,223,192,0.94)';
+    ctx.lineCap = 'round';
+    ctx.stroke();
+
+    // neck + head, tipped back slightly as if asleep
+    ctx.beginPath();
+    ctx.ellipse(34, -2 - chestLift * 0.4, 13, 12, -0.18, 0, Math.PI * 2);
+    ctx.fillStyle = 'rgba(246,223,192,0.96)';
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  // ---------- breathing (drives the figure and the audio) ----------
+  const INHALE = 4200;
+  const EXHALE = 5800;
+  const CYCLE = INHALE + EXHALE;
+  function smooth(x){ return 0.5 - 0.5 * Math.cos(Math.PI * x); }
+  function breathPhase(t){
+    const c = t % CYCLE;
+    return c < INHALE ? smooth(c / INHALE) : 1 - smooth((c - INHALE) / EXHALE);
+  }
+
+  const breathCircleEl = document.getElementById('breathCircle');
+  let lastBreathLabel = '';
+  function updateBreathCircle(t, phase){
+    const c = t % CYCLE;
+    const label = c < INHALE ? 'breathe in' : 'breathe out';
+    if (label !== lastBreathLabel){
+      breathCircleEl.textContent = label;
+      lastBreathLabel = label;
+    }
+    const scale = 1 + phase * 0.22;
+    breathCircleEl.style.transform = `translate(-50%,-50%) scale(${scale})`;
+    breathCircleEl.style.boxShadow = `0 0 ${24 + phase * 26}px ${5 + phase * 8}px rgba(255,233,194,${0.08 + phase * 0.12})`;
+  }
+
+  // ---------- main render loop ----------
+  function drawScene(t){
+    ctx.clearRect(0, 0, W, H);
+    const bg = ctx.createLinearGradient(0, 0, 0, H);
+    bg.addColorStop(0, '#0d1226');
+    bg.addColorStop(1, '#161d38');
+    ctx.fillStyle = bg;
+    ctx.fillRect(0, 0, W, H);
+
+    nebulae.forEach(n => {
+      const cx = n.xR * W, cy = n.yR * H, r = n.rR * Math.max(W, H);
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, r);
+      g.addColorStop(0, `rgba(${n.color},0.26)`);
+      g.addColorStop(1, `rgba(${n.color},0)`);
+      ctx.fillStyle = g;
+      ctx.beginPath(); ctx.arc(cx, cy, r, 0, Math.PI * 2); ctx.fill();
+    });
+
+    [starsFar, starsNear].forEach(layer => {
+      layer.forEach(s => {
+        const flick = 0.5 + 0.5 * Math.sin(t * s.flickSpeed + s.flick);
+        ctx.beginPath();
+        ctx.arc(s.x * W, s.y * H, s.r, 0, Math.PI * 2);
+        ctx.fillStyle = `rgba(234,242,255,${0.4 + 0.5 * flick})`;
+        ctx.fill();
+      });
+    });
+
+    maybeSpawnShootingStar(t);
+    updateShootingStar();
+    drawShootingStar();
+
+    updateRipples();
+    drawRipples();
+
+    updateBody();
+    const phase = breathPhase(t);
+    drawBody(t, phase);
+    updateBreathCircle(t, phase);
+
+    if (audioReady) applyBreathToAudio(phase);
+  }
+
+  let rafId;
+  function loop(t){
+    drawScene(t);
+    rafId = requestAnimationFrame(loop);
+  }
+  rafId = requestAnimationFrame(loop);
+
+  // ---------- pointer input: slow drag/scroll lifts him, quick tap sends ripple ----------
+  let dragging = false;
+  let lastX = 0, lastY = 0;
+  let downX = 0, downY = 0, downT = 0;
+  let moved = false;
+
+  function pointerPos(e){
+    if (e.touches && e.touches.length) return { x: e.touches[0].clientX, y: e.touches[0].clientY };
+    return { x: e.clientX, y: e.clientY };
+  }
+
+  function onDown(e){
+    if (!veil.classList.contains('hidden')) return;
+    const p = pointerPos(e);
+    dragging = true; moved = false;
+    lastX = downX = p.x; lastY = downY = p.y;
+    downT = performance.now();
+  }
+  function onMove(e){
+    if (!dragging) return;
+    const p = pointerPos(e);
+    const dx = p.x - lastX, dy = p.y - lastY;
+    if (Math.hypot(p.x - downX, p.y - downY) > 6) moved = true;
+    applyForce(dx * 0.0006, dy * 0.0011);
+    lastX = p.x; lastY = p.y;
+  }
+  function onUp(){
+    if (!dragging) return;
+    dragging = false;
+    const dt = performance.now() - downT;
+    if (!moved && dt < 350){
+      spawnRipple(downX, downY);
+      // push the body gently away from the tap point —
+      // a tap below him lifts him, a tap above settles him, same for either side
+      const dx = body.x - downX;
+      const dy = body.y - downY;
+      const dist = Math.max(Math.hypot(dx, dy), 1);
+      const power = 0.055; // small, heavily damped by the physics loop
+      applyForce((dx / dist) * power, (dy / dist) * power);
+    }
+  }
+  function onWheel(e){
+    if (!veil.classList.contains('hidden')){
+      return;
+    }
+    // scroll up (negative deltaY) lifts him; scroll down settles him faster
+    applyForce(0, e.deltaY * 0.00035);
+  }
+
+  window.addEventListener('mousedown', onDown);
+  window.addEventListener('mousemove', onMove);
+  window.addEventListener('mouseup', onUp);
+  window.addEventListener('touchstart', onDown, { passive:true });
+  window.addEventListener('touchmove', onMove, { passive:true });
+  window.addEventListener('touchend', onUp);
+  window.addEventListener('wheel', onWheel, { passive:true });
+
+  // ---------- audio: generated natural chimes, no samples ----------
+  let audioCtx, masterGain, padGain, noiseGain, filter, reverb, chimeBus;
+  let audioReady = false;
+  let soundOn = true;
+  let chimeTimer = null;
+
+  // simple synthetic reverb: short noise burst shaped into a decaying tail
+  function buildReverb(ctx, seconds, decay){
+    const length = ctx.sampleRate * seconds;
+    const impulse = ctx.createBuffer(2, length, ctx.sampleRate);
+    for (let ch = 0; ch < 2; ch++){
+      const data = impulse.getChannelData(ch);
+      for (let i = 0; i < length; i++){
+        data[i] = (Math.random() * 2 - 1) * Math.pow(1 - i / length, decay);
+      }
+    }
+    const node = ctx.createConvolver();
+    node.buffer = impulse;
+    return node;
+  }
+
+  function buildAudio(){
+    audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+
+    masterGain = audioCtx.createGain();
+    masterGain.gain.value = 0.0001;
+    masterGain.connect(audioCtx.destination);
+
+    // faint warm pad bed, kept low so the chimes lead
+    padGain = audioCtx.createGain();
+    padGain.gain.value = 0.07;
+    padGain.connect(masterGain);
+
+    const padFilter = audioCtx.createBiquadFilter();
+    padFilter.type = 'lowpass';
+    padFilter.frequency.value = 620;
+    padFilter.connect(padGain);
+
+    [130.8, 196.0].forEach((freq, i) => { // C3, G3 — open, restful
+      const osc = audioCtx.createOscillator();
+      osc.type = 'sine';
+      osc.frequency.value = freq;
+      const g = audioCtx.createGain();
+      g.gain.value = i === 0 ? 0.4 : 0.22;
+      osc.connect(g);
+      g.connect(padFilter);
+      osc.start();
+    });
+
+    // very soft air texture underneath, barely present
+    const bufferSize = 2 * audioCtx.sampleRate;
+    const noiseBuffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
+    const data = noiseBuffer.getChannelData(0);
+    let lastOut = 0;
+    for (let i = 0; i < bufferSize; i++){
+      const white = Math.random() * 2 - 1;
+      data[i] = (lastOut + (0.02 * white)) / 1.02;
+      lastOut = data[i];
+      data[i] *= 2.2;
+    }
+    const noiseSource = audioCtx.createBufferSource();
+    noiseSource.buffer = noiseBuffer;
+    noiseSource.loop = true;
+
+    filter = audioCtx.createBiquadFilter();
+    filter.type = 'lowpass';
+    filter.frequency.value = 340;
+    filter.Q.value = 0.4;
+
+    noiseGain = audioCtx.createGain();
+    noiseGain.gain.value = 0.035;
+
+    noiseSource.connect(filter);
+    filter.connect(noiseGain);
+    noiseGain.connect(masterGain);
+    noiseSource.start();
+
+    // reverb send for the chimes, so each note blooms and tails off naturally
+    reverb = buildReverb(audioCtx, 3.2, 2.2);
+    chimeBus = audioCtx.createGain();
+    chimeBus.gain.value = 0.5;
+    chimeBus.connect(reverb);
+    reverb.connect(masterGain);
+    chimeBus.connect(masterGain); // a touch of the dry note too
+
+    masterGain.gain.linearRampToValueAtTime(0.5, audioCtx.currentTime + 6);
+    audioReady = true;
+
+    scheduleNextChime(2500);
+  }
+
+  // gentle pentatonic set, spread across two octaves — no note ever clashes
+  const CHIME_NOTES = [392.0, 440.0, 523.25, 587.33, 659.25, 784.0, 880.0, 1046.5];
+
+  function playChime(){
+    if (!audioCtx || !soundOn) return;
+    const now = audioCtx.currentTime;
+    const freq = CHIME_NOTES[Math.floor(Math.random() * CHIME_NOTES.length)];
+
+    const osc = audioCtx.createOscillator();
+    osc.type = 'sine';
+    osc.frequency.value = freq;
+
+    const overtone = audioCtx.createOscillator();
+    overtone.type = 'sine';
+    overtone.frequency.value = freq * 2.01; // very slightly detuned, bell-like shimmer
+
+    const env = audioCtx.createGain();
+    env.gain.setValueAtTime(0, now);
+    env.gain.linearRampToValueAtTime(0.22, now + 0.02);   // quick, soft pluck
+    env.gain.exponentialRampToValueAtTime(0.0001, now + 3.6); // long natural decay
+
+    const overtoneGain = audioCtx.createGain();
+    overtoneGain.gain.value = 0.08;
+
+    osc.connect(env);
+    overtone.connect(overtoneGain);
+    overtoneGain.connect(env);
+    env.connect(chimeBus);
+
+    osc.start(now);
+    overtone.start(now);
+    osc.stop(now + 3.8);
+    overtone.stop(now + 3.8);
+  }
+
+  function scheduleNextChime(minDelay){
+    const delay = minDelay || (4200 + Math.random() * 5200);
+    chimeTimer = setTimeout(() => {
+      playChime();
+      // occasionally let a soft second note follow, like a natural chime cluster
+      if (Math.random() < 0.35){
+        setTimeout(playChime, 260 + Math.random() * 420);
+      }
+      scheduleNextChime();
+    }, delay);
+  }
+
+  function applyBreathToAudio(phase){
+    if (!audioCtx) return;
+    const now = audioCtx.currentTime;
+    padGain.gain.setTargetAtTime(0.05 + phase * 0.05, now, 0.9);
+    filter.frequency.setTargetAtTime(280 + phase * 160, now, 0.9);
+  }
+
+  // ---------- start flow ----------
+  const veil = document.getElementById('veil');
+  const beginBtn = document.getElementById('beginBtn');
+  const controls = document.getElementById('controls');
+
+  beginBtn.addEventListener('click', () => {
+    buildAudio();
+    veil.classList.add('hidden');
+    breathCircleEl.classList.add('visible');
+    setTimeout(() => controls.classList.add('visible'), 4000);
+  }, { once:true });
+
+  const soundToggle = document.getElementById('soundToggle');
+  soundToggle.addEventListener('click', () => {
+    soundOn = !soundOn;
+    soundToggle.textContent = 'sound: ' + (soundOn ? 'on' : 'off');
+    if (audioCtx){
+      masterGain.gain.setTargetAtTime(soundOn ? 0.5 : 0.0001, audioCtx.currentTime, 1.2);
+    }
+  });
+
+  let hideTimer;
+  function nudgeControls(){
+    if (!veil.classList.contains('hidden')) return;
+    controls.classList.add('visible');
+    clearTimeout(hideTimer);
+    hideTimer = setTimeout(() => controls.classList.remove('visible'), 3500);
+  }
+  window.addEventListener('mousemove', nudgeControls);
+  window.addEventListener('touchstart', nudgeControls, { passive:true });
+
+})();
+</script>
+</body>
+</html>
