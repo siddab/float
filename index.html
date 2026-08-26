@@ -59,15 +59,15 @@
 
   #breathCircle{
     position:fixed; left:50%; top:50%;
-    width:86px; height:86px;
+    width:150px; height:150px;
     transform:translate(-50%,-50%) scale(1);
     border-radius:50%;
     border:1px solid rgba(255,233,194,0.45);
-    box-shadow:0 0 30px 6px rgba(255,233,194,0.12);
+    box-shadow:0 0 34px 7px rgba(255,233,194,0.12);
     display:flex; align-items:center; justify-content:center;
     text-align:center;
     color:var(--mist);
-    font-size:12px; letter-spacing:0.08em; font-weight:300;
+    font-size:13px; letter-spacing:0.08em; font-weight:300;
     opacity:0;
     transition:opacity 3s ease, box-shadow 0.4s ease;
     pointer-events:none;
@@ -75,11 +75,21 @@
     background:rgba(255,233,194,0.03);
   }
   #breathCircle.visible{ opacity:0.85; }
+
+  #dimOverlay{
+    position:fixed; inset:0;
+    background:#000;
+    opacity:0;
+    pointer-events:none;
+    z-index:4;
+    transition:opacity 0.5s ease-out;
+  }
 </style>
 </head>
 <body>
 
 <canvas id="scene"></canvas>
+<div id="dimOverlay"></div>
 <div id="breathCircle">breathe in</div>
 
 <div id="controls">
@@ -193,6 +203,59 @@
     });
   }
 
+  // ---------- fading trail behind a finger/mouse swipe ----------
+  const trailPoints = [];
+  function addTrailPoint(x, y){
+    trailPoints.push({ x, y, life: 1 });
+    if (trailPoints.length > 40) trailPoints.shift();
+  }
+  function updateTrail(){
+    for (let i = trailPoints.length - 1; i >= 0; i--){
+      trailPoints[i].life -= 0.035;
+      if (trailPoints[i].life <= 0) trailPoints.splice(i, 1);
+    }
+  }
+  function drawTrail(){
+    if (trailPoints.length < 2) return;
+    for (let i = 1; i < trailPoints.length; i++){
+      const p0 = trailPoints[i - 1], p1 = trailPoints[i];
+      ctx.beginPath();
+      ctx.moveTo(p0.x, p0.y);
+      ctx.lineTo(p1.x, p1.y);
+      ctx.strokeStyle = `rgba(255,233,194,${0.4 * p1.life})`;
+      ctx.lineWidth = 1 + 2.2 * p1.life;
+      ctx.lineCap = 'round';
+      ctx.stroke();
+    }
+  }
+
+  // ---------- soft wind wisps that swirl around the breathing circle on the exhale ----------
+  const windStrands = [];
+  const WIND_COUNT = 6;
+  for (let i = 0; i < WIND_COUNT; i++){
+    windStrands.push({
+      baseAngle: Math.random() * Math.PI * 2,
+      radius: 95 + Math.random() * 40,
+      speed: (Math.random() < 0.5 ? -1 : 1) * (0.0007 + Math.random() * 0.0005),
+      sweep: 0.4 + Math.random() * 0.3,
+      wobbleSpeed: 0.0009 + Math.random() * 0.0006,
+      wobbleAmp: 6 + Math.random() * 10
+    });
+  }
+  function drawWind(t, intensity){
+    if (intensity <= 0.015) return;
+    const cx = W / 2, cy = H / 2;
+    windStrands.forEach(w => {
+      const angle = w.baseAngle + t * w.speed;
+      const r = w.radius + Math.sin(t * w.wobbleSpeed) * w.wobbleAmp;
+      ctx.beginPath();
+      ctx.arc(cx, cy, r, angle, angle + w.sweep);
+      ctx.strokeStyle = `rgba(231,224,207,${0.32 * intensity})`;
+      ctx.lineWidth = 1.2;
+      ctx.stroke();
+    });
+  }
+
   // ---------- the floating figure (side profile, lying on his back) ----------
   const body = {
     x: 0, y: 0,
@@ -202,8 +265,8 @@
   function initBody(){ body.x = W / 2; body.y = H * 0.4; }
   initBody();
 
-  const DAMPING = 0.985;
-  const MAX_SPEED = 0.55;
+  const DAMPING = 0.992;
+  const MAX_SPEED = 1.1;
   const GRAVITY = 0.0026;      // slow, constant downward drift
   const EDGE_PAD = 90;
 
@@ -321,6 +384,20 @@
     const c = t % CYCLE;
     return c < INHALE ? smooth(c / INHALE) : 1 - smooth((c - INHALE) / EXHALE);
   }
+  // 0 through the inhale, rises and falls smoothly across the exhale only —
+  // this is what the wind wisps fade in and out with
+  function exhaleWindIntensity(t){
+    const c = t % CYCLE;
+    if (c < INHALE) return 0;
+    const p = (c - INHALE) / EXHALE;
+    return Math.sin(Math.PI * p);
+  }
+
+  const dimOverlayEl = document.getElementById('dimOverlay');
+  const MAX_DIM = 0.22;
+  function updateDim(phase){
+    dimOverlayEl.style.opacity = (MAX_DIM * (1 - phase)).toFixed(3);
+  }
 
   const breathCircleEl = document.getElementById('breathCircle');
   let lastBreathLabel = '';
@@ -336,12 +413,27 @@
     breathCircleEl.style.boxShadow = `0 0 ${24 + phase * 26}px ${5 + phase * 8}px rgba(255,233,194,${0.08 + phase * 0.12})`;
   }
 
+  function lerp(a, b, t){ return a + (b - a) * t; }
+  function lerpColor(c1, c2, t){
+    return [
+      Math.round(lerp(c1[0], c2[0], t)),
+      Math.round(lerp(c1[1], c2[1], t)),
+      Math.round(lerp(c1[2], c2[2], t))
+    ];
+  }
+  const SKY_BRIGHT_TOP = [13, 18, 38];
+  const SKY_BRIGHT_BOTTOM = [22, 29, 56];
+  const SKY_DARK_TOP = [3, 4, 9];
+  const SKY_DARK_BOTTOM = [6, 8, 16];
+
   // ---------- main render loop ----------
-  function drawScene(t){
+  function drawScene(t, phase){
     ctx.clearRect(0, 0, W, H);
+    const top = lerpColor(SKY_DARK_TOP, SKY_BRIGHT_TOP, phase);
+    const bottom = lerpColor(SKY_DARK_BOTTOM, SKY_BRIGHT_BOTTOM, phase);
     const bg = ctx.createLinearGradient(0, 0, 0, H);
-    bg.addColorStop(0, '#0d1226');
-    bg.addColorStop(1, '#161d38');
+    bg.addColorStop(0, `rgb(${top[0]},${top[1]},${top[2]})`);
+    bg.addColorStop(1, `rgb(${bottom[0]},${bottom[1]},${bottom[2]})`);
     ctx.fillStyle = bg;
     ctx.fillRect(0, 0, W, H);
 
@@ -371,17 +463,22 @@
     updateRipples();
     drawRipples();
 
+    updateTrail();
+    drawTrail();
+
     updateBody();
-    const phase = breathPhase(t);
     drawBody(t, phase);
     updateBreathCircle(t, phase);
+    updateDim(phase);
+    drawWind(t, exhaleWindIntensity(t));
 
     if (audioReady) applyBreathToAudio(phase);
   }
 
   let rafId;
   function loop(t){
-    drawScene(t);
+    const phase = breathPhase(t);
+    drawScene(t, phase);
     rafId = requestAnimationFrame(loop);
   }
   rafId = requestAnimationFrame(loop);
@@ -409,7 +506,8 @@
     const p = pointerPos(e);
     const dx = p.x - lastX, dy = p.y - lastY;
     if (Math.hypot(p.x - downX, p.y - downY) > 6) moved = true;
-    applyForce(dx * 0.0006, dy * 0.0011);
+    applyForce(dx * 0.0022, dy * 0.0032);
+    addTrailPoint(p.x, p.y);
     lastX = p.x; lastY = p.y;
   }
   function onUp(){
@@ -423,7 +521,7 @@
       const dx = body.x - downX;
       const dy = body.y - downY;
       const dist = Math.max(Math.hypot(dx, dy), 1);
-      const power = 0.055; // small, heavily damped by the physics loop
+      const power = 0.22; // small, heavily damped by the physics loop
       applyForce((dx / dist) * power, (dy / dist) * power);
     }
   }
@@ -432,7 +530,7 @@
       return;
     }
     // scroll up (negative deltaY) lifts him; scroll down settles him faster
-    applyForce(0, e.deltaY * 0.00035);
+    applyForce(0, e.deltaY * 0.0005);
   }
 
   window.addEventListener('mousedown', onDown);
